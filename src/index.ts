@@ -111,15 +111,6 @@ bot.onText(/^\/list (.+)/i, (msg, match) => {
   }
 });
 
-bot.onText(/^\/getFolder/i, (msg) => {
-  if (msgTools.isAuthorized(msg) < 0) {
-    sendUnauthorizedMessage(msg);
-  } else {
-    sendMessage(msg,
-      '<a href = \'' + driveUtils.getFileLink(constants.GDRIVE_PARENT_DIR_ID, true) + '\'>Drive mirror folder</a>',
-      60000);
-  }
-});
 
 bot.onText(/^\/cancelMirror/i, (msg) => {
   var authorizedCode = msgTools.isAuthorized(msg);
