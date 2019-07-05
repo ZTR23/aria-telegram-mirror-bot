@@ -16,7 +16,7 @@ var dlManager = dlm.DlManager.getInstance();
 
 initAria2();
 
-bot.on("polling_error", msg => console.log(msg.message));
+bot.on("polling_error", msg => console.error(msg.message));
 
 bot.onText(/^\/start/, (msg) => {
   if (msgTools.isAuthorized(msg) < 0) {
@@ -70,7 +70,7 @@ bot.onText(/^\/mirrorStatus/i, (msg) => {
 });
 
 function getSingleStatus(dlDetails: details.DlVars, msg?: TelegramBot.Message): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise(resolve => {
     var authorizedCode;
     if (msg) {
       authorizedCode = msgTools.isAuthorized(msg);
@@ -81,7 +81,7 @@ function getSingleStatus(dlDetails: details.DlVars, msg?: TelegramBot.Message): 
     if (authorizedCode > -1) {
       ariaTools.getStatus(dlDetails.gid, (err, message, filename) => {
         if (err) {
-          reject(`Error: ${dlDetails.gid} - ${err}`);
+          resolve(`Error: ${dlDetails.gid} - ${err}`);
         } else {
           if (dlDetails.isUploading) {
             resolve(`<i>${filename}</i> - Uploading`);
@@ -92,7 +92,7 @@ function getSingleStatus(dlDetails: details.DlVars, msg?: TelegramBot.Message): 
         }
       });
     } else {
-      reject(`You aren't authorized to use this bot here.`);
+      resolve(`You aren't authorized to use this bot here.`);
     }
   });
 }
@@ -131,20 +131,67 @@ bot.onText(/^\/cancelMirror/i, (msg) => {
         sendMessage(msg, 'You cannot use this bot here.');
       }
     } else {
-      sendMessage(msg, `Reply to the command message, or the bot's download confirmation message` +
-        ` for the download that you want to cancel. Also make sure that the download even active.`);
+      sendMessage(msg, `Reply to the command message for the download that you want to cancel.` +
+        ` Also make sure that the download is even active.`);
     }
   } else {
-    sendMessage(msg, `Reply to the command message, or the bot's download confirmation message` +
-      ` for the download that you want to cancel.`);
+    sendMessage(msg, `Reply to the command message for the download that you want to cancel.`);
   }
 });
 
-function cancelMirror(dlDetails: details.DlVars, cancelMsg?: TelegramBot.Message) {
+bot.onText(/^\/cancelAll/i, (msg) => {
+  var authorizedCode = msgTools.isAuthorized(msg, true);
+  var count = 0;
+  if (authorizedCode === 0) {
+    // One of SUDO_USERS. Cancel all downloads
+    dlManager.forEachDownload(dlDetails => {
+      if (cancelMirror(dlDetails)) {
+        count++;
+      }
+    });
+
+  } else if (authorizedCode === 2) {
+    // Chat admin, but not sudo. Cancel all downloads from that chat.
+    count = cancelMirrorForChat(msg.chat.id);
+  } else if (authorizedCode === 3) {
+    msgTools.isAdmin(bot, msg, (e, res) => {
+      if (res) {
+        count = cancelMirrorForChat(msg.chat.id);
+      } else {
+        sendMessage(msg, 'You do not have permission to do that.');
+        return;
+      }
+    });
+  } else {
+    sendMessage(msg, 'You cannot use this bot here.');
+    return;
+  }
+
+  if (count > 0) {
+    sendMessage(msg, `${count} downloads cancelled.`, 30000);
+  } else {
+    sendMessage(msg, 'No downloads to cancel');
+  }
+});
+
+function cancelMirrorForChat(chatId: number): number {
+  var count = 0;
+  dlManager.forEachDownload(dlDetails => {
+    if (dlDetails.tgChatId === chatId) {
+      if (cancelMirror(dlDetails)) {
+        count++;
+      }
+    }
+  });
+  return count;
+}
+
+function cancelMirror(dlDetails: details.DlVars, cancelMsg?: TelegramBot.Message): boolean {
   if (dlDetails.isUploading) {
     if (cancelMsg) {
       sendMessage(cancelMsg, 'Upload in progress. Cannot cancel.');
     }
+    return false;
   } else {
     ariaTools.stopDownload(dlDetails.gid, () => {
       // Not sending a message here, because a cancel will fire
@@ -162,6 +209,7 @@ function cancelMirror(dlDetails: details.DlVars, cancelMsg?: TelegramBot.Message
       }
     });
   }
+  return true;
 }
 
 /**
@@ -195,18 +243,20 @@ function handleDisallowedFilename(dlDetails: details.DlVars, filename: string): 
 }
 
 function prepDownload(msg: TelegramBot.Message, match: string, isTar: boolean) {
-  sendMessage(msg, 'Preparing', -1, statusMessage => {
-    var dlDir = uuid();
-    ariaTools.addUri(match, dlDir, (err, gid) => {
-      dlManager.addDownload(gid, dlDir, msg, statusMessage, isTar);
-      if (err) {
-        var message = `Failed to start the download. ${err.message}`;
-        console.error(message);
-        cleanupDownload(gid, message);
-      } else {
-        console.log(`download:${match} gid:${gid}`);
-      }
-    });
+  var dlDir = uuid();
+  ariaTools.addUri(match, dlDir, (err, gid) => {
+    dlManager.addDownload(gid, dlDir, msg, isTar);
+    if (err) {
+      var message = `Failed to start the download. ${err.message}`;
+      console.error(message);
+      cleanupDownload(gid, message);
+    } else {
+      console.log(`download:${match} gid:${gid}`);
+      // Wait a second to give aria2 enough time to queue the download
+      setTimeout(() => {
+        dlManager.setStatusLock(msg, sendStatusMessage);
+      }, 1000);
+    }
   });
 
 }
@@ -229,7 +279,9 @@ function sendMessage(msg: TelegramBot.Message, text: string, delay?: number,
         }
       }
     })
-    .catch((ignored) => { });
+    .catch((err) => {
+      console.error(`sendMessage error: ${err.message}`);
+    });
 }
 
 function sendUnauthorizedMessage(msg: TelegramBot.Message) {
@@ -240,39 +292,52 @@ function sendMessageReplyOriginal(dlDetails: details.DlVars, message: string): P
   return bot.sendMessage(dlDetails.tgChatId, message, {
     reply_to_message_id: dlDetails.tgMessageId,
     parse_mode: 'HTML'
-  })
+  });
+}
+
+interface StatusPromise {
+  message: string;
+  totalDownloadCount: number;
 }
 
 /**
  * Get a single status message for all active and queued downloads.
  */
-function getStatusMessage(callback: (err: string, message: string) => void) {
+function getStatusMessage(): Promise<StatusPromise> {
   var singleStatusArr: Promise<string>[] = [];
 
   dlManager.forEachDownload(dlDetails => {
     singleStatusArr.push(getSingleStatus(dlDetails));
   });
 
-  Promise.all(singleStatusArr)
+  var result: Promise<StatusPromise> = Promise.all(singleStatusArr)
     .then(statusArr => {
       if (statusArr && statusArr.length > 0) {
-        callback(null, statusArr.reduce((prev, curr, i) => {
+        var message = statusArr.reduce((prev, curr, i) => {
           return i > 0 ? `${prev}\n\n${curr}` : `${curr}`;
-        }));
+        });
+        return {
+          message: message,
+          totalDownloadCount: statusArr.length
+        };
       } else {
-        callback(null, 'No active or queued downloads');
+        return {
+          message: 'No active or queued downloads',
+          totalDownloadCount: 0
+        };
       }
     })
     .catch(error => {
       console.log(`getStatusMessage: ${error}`);
-      callback(error, null);
-    })
+      return error;
+    });
+  return result;
 }
 
 /**
  * Sends a single status message for all active and queued downloads.
  */
-function sendStatusMessage(msg: TelegramBot.Message) {
+function sendStatusMessage(msg: TelegramBot.Message, keepForever?: boolean): Promise<any> {
   var lastStatus = dlManager.getStatus(msg.chat.id);
 
   if (lastStatus) {
@@ -280,64 +345,48 @@ function sendStatusMessage(msg: TelegramBot.Message) {
     dlManager.deleteStatus(msg.chat.id);
   }
 
-  getStatusMessage((err, messageText) => {
-    var finalMessage = err ? err : messageText;
-    sendMessage(msg, finalMessage, 60000, message => {
-      dlManager.addStatus(message);
-    }, true);
-  });
-}
-
-/**
- * Updates the original status message sent by the bot as a reply to the
- * download command message.
- */
-function updateStatusMessage(dlDetails: details.DlVars, text?: string) {
-  if (text) {
-    editMessage(dlDetails.origStatusMsg, text);
-  } else {
-    getSingleStatus(dlDetails)
+  return new Promise(resolve => {
+    getStatusMessage()
       .then(res => {
-        editMessage(dlDetails.origStatusMsg, res);
+        if (keepForever) {
+          sendMessage(msg, res.message, -1, message => {
+            dlManager.addStatus(message);
+            resolve();
+          });
+        } else {
+          sendMessage(msg, res.message, 60000, message => {
+            dlManager.addStatus(message);
+            resolve();
+          }, true);
+        }
       })
-      .catch(err => {
-        console.log(`updateStatusMessage: ${err}`);
-        editMessage(dlDetails.origStatusMsg, err);
-      })
-  }
-}
-
-/**
- * Updates all general status messages
- */
-function updateAllGeneralStatus() {
-  getStatusMessage((err, messageText) => {
-    var finalMessage = err ? err : messageText;
-    dlManager.forEachStatus(statusMessage => {
-      editMessage(statusMessage, finalMessage);
-    });
+      .catch(resolve);
   });
 }
 
 /**
- * Updates all general status messages, and all single status messages
- * sent to individual download commands.
+ * Updates all status messages
  */
 function updateAllStatus() {
-  var dlCount = 0;
-  // TODO: Both updateAllGeneralStatus() and updateStatusMessage() fetch the 
-  // status of each individual download. Rewrite to get each status only once.
-  updateAllGeneralStatus();
-  dlManager.forEachDownload(dlDetails => {
-    dlCount++;
-    updateStatusMessage(dlDetails);
-  });
+  getStatusMessage()
+    .then(res => {
+      dlManager.forEachStatus(statusMessage => {
+        editMessage(statusMessage, res.message);
+      });
 
-  if (dlCount === 0) {
-    // No more active or queued downloads, let's stop the status refresh timer
-    clearInterval(statusInterval);
-    statusInterval = null;
-  }
+      if (res.totalDownloadCount === 0) {
+        // No more active or queued downloads, let's stop the status refresh timer
+        clearInterval(statusInterval);
+        statusInterval = null;
+        deleteAllStatus();
+      }
+    }).catch();
+}
+
+function deleteAllStatus() {
+  dlManager.forEachStatus(statusMessage => {
+    msgTools.deleteMsg(bot, statusMessage, 10000);
+  });
 }
 
 function editMessage(msg: TelegramBot.Message, text: string) {
@@ -347,20 +396,9 @@ function editMessage(msg: TelegramBot.Message, text: string) {
       message_id: msg.message_id,
       parse_mode: 'HTML'
     })
-      .catch(ignored => { });
-  }
-}
-
-/**
- * Deletes the bot's original response to the download command, if less
- * than 10 messages have been sent to the group the download started in,
- * since the download was started. Deleted messages also count. Message
- * IDs are usually consecutive numbers, though that is not guaranteed by
- * the Telegram API. This function is not important enough for that to matter.
- **/
-function deleteOrigReply(dlDetails: details.DlVars, lastStatusMsg: TelegramBot.Message) {
-  if (lastStatusMsg.message_id - dlDetails.origStatusMsg.message_id < 10) {
-    msgTools.deleteMsg(bot, dlDetails.origStatusMsg, 0);
+      .catch(err => {
+        console.log(`editMessage error: ${err.message}`);
+      });
   }
 }
 
@@ -376,16 +414,16 @@ function cleanupDownload(gid: string, message: string, url?: string, dlDetails?:
   }
   if (dlDetails) {
     sendMessageReplyOriginal(dlDetails, message)
-      .then(msg => deleteOrigReply(dlDetails, msg))
-      .catch();
-    updateStatusMessage(dlDetails, message);
+      .catch((err) => {
+        console.error(`cleanupDownload sendMessage error: ${err.message}`);
+      });
     if (url) {
       msgTools.notifyExternal(true, gid, dlDetails.tgChatId, url);
     } else {
       msgTools.notifyExternal(false, gid, dlDetails.tgChatId);
     }
     dlManager.deleteDownload(gid);
-    updateAllGeneralStatus();
+    updateAllStatus();
     downloadUtils.deleteDownloadedFile(dlDetails.downloadDir);
   } else {
     // Why is this message so calm? We should be SCREAMING at this point!
@@ -398,7 +436,7 @@ function ariaOnDownloadStart(gid: string, retry: number) {
   if (dlDetails) {
     dlManager.moveDownloadToActive(dlDetails);
     console.log(`Started ${gid}. Dir: ${dlDetails.downloadDir}.`);
-    updateStatusMessage(dlDetails, 'Download started.');
+    updateAllStatus();
 
     ariaTools.getStatus(gid, (err, message, filename) => {
       if (!err) {
@@ -407,7 +445,8 @@ function ariaOnDownloadStart(gid: string, retry: number) {
     });
 
     if (!statusInterval) {
-      statusInterval = setInterval(updateAllStatus, 4000);
+      statusInterval = setInterval(updateAllStatus,
+        constants.STATUS_UPDATE_INTERVAL_MS ? constants.STATUS_UPDATE_INTERVAL_MS : 12000);
     }
   } else if (retry <= 8) {
     // OnDownloadStart probably got called before prepDownload's startDownload callback. Fairly common. Retry.

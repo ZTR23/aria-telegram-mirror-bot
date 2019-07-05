@@ -15,7 +15,8 @@ There is very little preventing users from using this to mirror pirated content.
 * `/mirror <url>`: Download from the given URL and upload it to Google Drive. <url> can be HTTP(S), a BitTorrent magnet, or a HTTP(S) url to a BitTorrent .torrent file. A status message will be shown and updated while downloading.
 * `/mirrorTar <url>`: Same as `/mirror`, but archive multiple files into a tar before uploading it.
 * `/mirrorStatus`: Send a status message about all active and queued downloads.
-* `/cancelMirror`: Cancel a particular mirroring task. To use this, send it as a reply to the message that started the download that you want to cancel, or to the message that the bot replied to it with. Only the person who started the task, SUDO_USERS, and chat admins can use this command.
+* `/cancelMirror`: Cancel a particular mirroring task. To use this, send it as a reply to the message that started the download that you want to cancel. Only the person who started the task, SUDO_USERS, and chat admins can use this command.
+* `/cancelAll`: Cancel all mirroring tasks in all chats if a [SUDO_USERS](#Constants-description) member uses it, or cancel all mirroring tasks for a particular chat if one of that chat's admins use it. No one else can use this command.
 * `/list <filename>` : Send links to downloads with the `filename` substring in the name. In case of too many downloads, only show the most recent few. 
 
 ## Migrating from v1.0.0
@@ -110,6 +111,7 @@ This is a description of the fields in src/.constants.js:
 * `GDRIVE_PARENT_DIR_ID`: This is the ID of the Google Drive folder that files will be uploaded into. You will get this from step 4 of Pre-installation.
 * `SUDO_USERS`: This is a list of Telegram user IDs. These users can use the bot in any chat. Can be an empty list, if AUTHORIZED_CHATS is not empty.
 * `AUTHORIZED_CHATS`: This is a list of Telegram Chat IDs. Anyone in these chats can use the bot in that particular chat. Anyone not in one of these chats and not in SUDO_USERS cannot use the bot. Someone in one of the chats in this list can use the bot only in that chat, not elsewhere. Can be an empty list, if SUDO_USERS is not empty.
+* `STATUS_UPDATE_INTERVAL_MS`: Set the time in milliseconds between status updates. A smaller number will update status messages faster, but Telegram will rate limit the bot if it sends/edits more than around 20 messages/minute/chat. As that quota includes messages other than status updates, do not decrease this number if you get rate limit messages in the logs.
 * `DOWNLOAD_NOTIFY_TARGET`: The fields here are used to notify an external web server once a download is complete. See the [section on notifications below](#Notifying-an-external-webserver-on-download-completion) for details.
    * `enabled`: Set this to `true` to enable this feature.
    * `host`: The address of the web server to notify.

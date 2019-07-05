@@ -14,6 +14,7 @@ export class DlManager {
    * Value: Status message: TelegramBot.Message
    */
   private statusAll: any = {};
+  private statusLock: any = {};
 
   private constructor() {
   }
@@ -25,8 +26,8 @@ export class DlManager {
     return DlManager.instance;
   }
 
-  addDownload(gid: string, dlDir: string, msg: TelegramBot.Message, statusMsg: TelegramBot.Message, isTar: boolean) {
-    var detail = new dlDetails.DlVars(gid, msg, statusMsg, isTar, dlDir);
+  addDownload(gid: string, dlDir: string, msg: TelegramBot.Message, isTar: boolean) {
+    var detail = new dlDetails.DlVars(gid, msg, isTar, dlDir);
     this.allDls[gid] = detail;
   }
 
@@ -64,13 +65,13 @@ export class DlManager {
   /**
    * Gets a download by the download command message, or the original reply
    * to the download command message.
-   * @param msg The download command message, or the original status message
+   * @param msg The download command message
    */
   getDownloadByMsgId(msg: TelegramBot.Message): dlDetails.DlVars {
     for (var dl of Object.keys(this.allDls)) {
       var download: dlDetails.DlVars = this.allDls[dl];
       if (download.tgChatId === msg.chat.id &&
-        (download.tgMessageId === msg.message_id || download.tgStatusMessageId === msg.message_id)) {
+        (download.tgMessageId === msg.message_id)) {
         return download;
       }
     }
@@ -121,4 +122,19 @@ export class DlManager {
     }
   }
 
+  /**
+   * Prevents race conditions when multiple status messages are sent in a short time.
+   * Makes sure that a status message has been properly sent before allowing the next one.
+   * @param msg The Telegram message that caused this status update
+   * @param toCall The function to call to perform the status update
+   */
+  setStatusLock(msg: TelegramBot.Message, toCall: (msg: TelegramBot.Message, keep: boolean) => Promise<any>) {
+    if (!this.statusLock[msg.chat.id]) {
+      this.statusLock[msg.chat.id] = Promise.resolve();
+    }
+
+    this.statusLock[msg.chat.id] = this.statusLock[msg.chat.id].then(() => {
+      return toCall(msg, true);
+    });
+  }
 }
